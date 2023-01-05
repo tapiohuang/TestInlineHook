@@ -26,12 +26,8 @@ enum hook_status {
 struct InlineHookItem {
     uint32_t target_addr;
     uint32_t new_addr;
-    uint32_t **proto_addr;
     int length;
     int status;
-    int orig_boundaries[4];
-    int trampoline_boundaries[20];
-    int count;
     void *orig_instructions;
     void *trampoline_instructions;
 };
@@ -43,8 +39,11 @@ struct inlineHookInfo {
 
 static struct inlineHookInfo info = {0};
 
+void *(*oriGetValue)(JNIEnv *env, jclass clazz);
+
 void *newGetValue(JNIEnv *env, jclass clazz) {
     LOGI(TAG, "新的函数");
+    jint o_ret = (jint) oriGetValue(env, clazz);
     jclass testJNIClazz = env->FindClass("o/w/testinlinehook/TestJni");
     jmethodID realValueMethodID = env->GetStaticMethodID(testJNIClazz, "realValue", "()I");
     jint realValue = env->CallStaticIntMethod(testJNIClazz, realValueMethodID);
@@ -61,7 +60,6 @@ static struct InlineHookItem *findInlineHookItem(uint32_t target_addr) {
     return nullptr;
 }
 
-//void *(*oriGetValue)(JNIEnv *env, jclass clazz);
 
 static struct InlineHookItem *addInlineHookItem() {
     struct InlineHookItem *item;
@@ -100,7 +98,10 @@ Java_o_w_testinlinehook_TestInlineHook_inlineHook(JNIEnv *env, jclass clazz) {
                 return;
             }
         }
+
+
         item = addInlineHookItem();
+
         item->target_addr = (uint32_t) get_value_addr;
         item->new_addr = (uint32_t) newGetValue;
         item->length = TEST_BIT0(item->target_addr) ? 12 : 8;
@@ -108,8 +109,29 @@ Java_o_w_testinlinehook_TestInlineHook_inlineHook(JNIEnv *env, jclass clazz) {
         memcpy(item->orig_instructions, (void *) CLEAR_BIT0(item->target_addr), item->length);
         item->trampoline_instructions = mmap(nullptr, PAGE_SIZE, PROT_READ | PROT_WRITE | PROT_EXEC,
                                              MAP_ANONYMOUS | MAP_PRIVATE, 0, 0);
+        //item->proto_addr = (uint32_t **) &newGetValue;
         mprotect((void *) PAGE_START(CLEAR_BIT0(item->target_addr)), PAGE_SIZE * 2,
                  PROT_READ | PROT_WRITE | PROT_EXEC);
+        if (TEST_BIT0(item->target_addr)) {
+            ((uint16_t *) item->trampoline_instructions)[0] = 0xF8DF;
+            ((uint16_t *) item->trampoline_instructions)[1] = 0xF000;
+            ((uint16_t *) item->trampoline_instructions)[2] = item->new_addr & 0xFFFF;
+            ((uint16_t *) item->trampoline_instructions)[3] = item->new_addr >> 16;
+            ((uint16_t *) item->trampoline_instructions)[4] = ((uint16_t *) item->orig_instructions)[0];
+            ((uint16_t *) item->trampoline_instructions)[5] = ((uint16_t *) item->orig_instructions)[1];
+            ((uint16_t *) item->trampoline_instructions)[6] = ((uint16_t *) item->orig_instructions)[2];
+            ((uint16_t *) item->trampoline_instructions)[7] = ((uint16_t *) item->orig_instructions)[3];
+            ((uint16_t *) item->trampoline_instructions)[8] = 0xF8DF;
+            ((uint16_t *) item->trampoline_instructions)[9] = 0xF000;
+            ((uint16_t *) item->trampoline_instructions)[10] =
+                    ((item->target_addr - 1) + 9) & 0xFFFF;
+            ((uint16_t *) item->trampoline_instructions)[11] = ((item->target_addr - 1) + 9) >> 16;
+            auto a = (uint32_t *) &((uint8_t *) item->trampoline_instructions)[9];
+            oriGetValue = reinterpret_cast<void *(*)(JNIEnv *, jclass)>(a);
+            /*uint32_t a = CLEAR_BIT0(item->target_addr);
+            uint32_t b = item->target_addr - 1;
+            auto c = &((uint32_t *) item->trampoline_instructions)[0];*/
+        }
         if (!TEST_BIT0(item->target_addr)) {
             LOGI(TAG, "HOOK ARM地址");
             ((uint32_t *) (item->target_addr))[0] = 0xe51ff004;// LDR PC, [PC, #-4]
@@ -124,8 +146,9 @@ Java_o_w_testinlinehook_TestInlineHook_inlineHook(JNIEnv *env, jclass clazz) {
             }
             ((uint16_t *) CLEAR_BIT0(item->target_addr))[i++] = 0xF8DF;
             ((uint16_t *) CLEAR_BIT0(item->target_addr))[i++] = 0xF000;    // LDR.W PC, [PC]
-            ((uint16_t *) CLEAR_BIT0(item->target_addr))[i++] = item->new_addr & 0xFFFF;
-            ((uint16_t *) CLEAR_BIT0(item->target_addr))[i++] = item->new_addr >> 16;
+            uint32_t t_addr = ((uint32_t) &((uint8_t *) item->trampoline_instructions)[1]);
+            ((uint16_t *) CLEAR_BIT0(item->target_addr))[i++] = t_addr & 0xFFFF;
+            ((uint16_t *) CLEAR_BIT0(item->target_addr))[i++] = t_addr >> 16;
         }
         /*relocateInstruction(item->target_addr, item->orig_instructions, item->length,
                             item->trampoline_instructions, item->orig_boundaries,

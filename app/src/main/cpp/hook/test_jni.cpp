@@ -9,5 +9,6 @@
 extern "C"
 JNIEXPORT jint JNICALL
 Java_o_w_testinlinehook_TestJni_getValue(JNIEnv *env, jclass clazz) {
+    LOGI(TAG, "原始函数");
     return -1;
 }
