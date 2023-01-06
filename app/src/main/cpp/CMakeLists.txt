@@ -11,7 +11,6 @@ add_library(
         test_jni
         SHARED
         hook/test_jni.cpp
-        hook/relocate.cpp
 )
 
 

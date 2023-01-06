@@ -12,38 +12,23 @@
 // #include <asm/ptrace.h>
 #include <sys/wait.h>
 #include <sys/ptrace.h>
-#include "relocate.h"
+#include "inline_hook.h"
 
 #define TAG "InlineHook"
 
 
-enum hook_status {
-    REGISTERED,
-    HOOKED,
-};
-
-
-struct InlineHookItem {
-    uint32_t target_addr;
-    uint32_t new_addr;
-    int length;
-    int status;
-    void *orig_instructions;
-    void *trampoline_instructions;
-};
-
-struct inlineHookInfo {
-    struct InlineHookItem items[1024];
-    int size;
-};
-
-static struct inlineHookInfo info = {0};
+int getValueTimes = 0;
 
 void *(*oriGetValue)(JNIEnv *env, jclass clazz);
 
 void *newGetValue(JNIEnv *env, jclass clazz) {
+    ++getValueTimes;
     LOGI(TAG, "新的函数");
     jint o_ret = (jint) oriGetValue(env, clazz);
+    LOGI(TAG, "原始函数的返回值:%d", o_ret);
+    if (getValueTimes % 2 == 0) {
+        return reinterpret_cast<void *>(o_ret);
+    }
     jclass testJNIClazz = env->FindClass("o/w/testinlinehook/TestJni");
     jmethodID realValueMethodID = env->GetStaticMethodID(testJNIClazz, "realValue", "()I");
     jint realValue = env->CallStaticIntMethod(testJNIClazz, realValueMethodID);
@@ -69,13 +54,7 @@ static struct InlineHookItem *addInlineHookItem() {
     }
     item = &info.items[info.size];
     ++info.size;
-
     return item;
-}
-
-void removeInlineHookItem(int pos) {
-    info.items[pos] = InlineHookItem{};
-    --info.size;
 }
 
 extern "C"
@@ -109,7 +88,6 @@ Java_o_w_testinlinehook_TestInlineHook_inlineHook(JNIEnv *env, jclass clazz) {
         memcpy(item->orig_instructions, (void *) CLEAR_BIT0(item->target_addr), item->length);
         item->trampoline_instructions = mmap(nullptr, PAGE_SIZE, PROT_READ | PROT_WRITE | PROT_EXEC,
                                              MAP_ANONYMOUS | MAP_PRIVATE, 0, 0);
-        //item->proto_addr = (uint32_t **) &newGetValue;
         mprotect((void *) PAGE_START(CLEAR_BIT0(item->target_addr)), PAGE_SIZE * 2,
                  PROT_READ | PROT_WRITE | PROT_EXEC);
         if (TEST_BIT0(item->target_addr)) {
@@ -128,9 +106,6 @@ Java_o_w_testinlinehook_TestInlineHook_inlineHook(JNIEnv *env, jclass clazz) {
             ((uint16_t *) item->trampoline_instructions)[11] = ((item->target_addr - 1) + 9) >> 16;
             auto a = (uint32_t *) &((uint8_t *) item->trampoline_instructions)[9];
             oriGetValue = reinterpret_cast<void *(*)(JNIEnv *, jclass)>(a);
-            /*uint32_t a = CLEAR_BIT0(item->target_addr);
-            uint32_t b = item->target_addr - 1;
-            auto c = &((uint32_t *) item->trampoline_instructions)[0];*/
         }
         if (!TEST_BIT0(item->target_addr)) {
             LOGI(TAG, "HOOK ARM地址");
@@ -150,10 +125,7 @@ Java_o_w_testinlinehook_TestInlineHook_inlineHook(JNIEnv *env, jclass clazz) {
             ((uint16_t *) CLEAR_BIT0(item->target_addr))[i++] = t_addr & 0xFFFF;
             ((uint16_t *) CLEAR_BIT0(item->target_addr))[i++] = t_addr >> 16;
         }
-        /*relocateInstruction(item->target_addr, item->orig_instructions, item->length,
-                            item->trampoline_instructions, item->orig_boundaries,
-                            item->trampoline_boundaries, &item->count);*/
-        item->status = REGISTERED;
+        item->status = HOOKED;
     } else {
         LOGE(TAG, "获取getValue地址失败");
     }
